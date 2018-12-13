@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text;
 using DocumentFormat.OpenXml.Presentation;
 using DocumentFormat.OpenXml.Packaging;
+using Serilog;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AnnotatePPTX
 {
@@ -11,6 +13,8 @@ namespace AnnotatePPTX
     {
         static void Main(string[] args)
         {
+            Startup();
+
             var presentationFile = "test-files/slides.pptx";
             // Open the presentation as read-only.
             using (PresentationDocument presentationDocument = PresentationDocument.Open(presentationFile, false))
@@ -19,6 +23,24 @@ namespace AnnotatePPTX
             }
 
             Console.WriteLine("Hello World!");
+        }
+
+        private static void Startup()
+        {
+            Log.Logger = new LoggerConfiguration()
+                .WriteTo.File("consoleapp.log")
+                .CreateLogger();
+
+            var serviceCollection = new ServiceCollection();
+            ConfigureServices(serviceCollection);
+
+            var serviceProvider = serviceCollection.BuildServiceProvider();
+        }
+
+        private static void ConfigureServices(IServiceCollection services)
+        {
+            services.AddLogging(configure => configure.AddSerilog())
+                    .AddTransient<MyClass>();
         }
 
         // Insert the specified slide into the presentation at the specified position.
