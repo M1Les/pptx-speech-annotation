@@ -6,41 +6,56 @@ using DocumentFormat.OpenXml.Presentation;
 using DocumentFormat.OpenXml.Packaging;
 using Serilog;
 using Microsoft.Extensions.DependencyInjection;
+using System.IO;
 
 namespace AnnotatePPTX
 {
     class Program
     {
+        private static ILogger _logger;
+
         static void Main(string[] args)
         {
-            Startup();
+            var services = Startup();
 
             var presentationFile = "test-files/slides.pptx";
-            // Open the presentation as read-only.
-            using (PresentationDocument presentationDocument = PresentationDocument.Open(presentationFile, false))
-            {
-                ReadSlideInfo(presentationDocument);
-            }
+            var fileCopyPath = "test-files/replacedAudio.pptx";
+
+            File.Copy(presentationFile, fileCopyPath, true);
+            _logger = Log.Logger;
+
+            var doc = new Presentation(fileCopyPath, Log.Logger);
+
+            var comments = doc.GetAllSlideNotes();
+            doc.ReplaceSlideAudioAnnotation(comments.FirstOrDefault()?.SlideRelationshipId, File.ReadAllBytes("test-files/zh-HK.wav"));
+
+            //// Open the presentation as read-only.
+            //using (PresentationDocument presentationDocument = PresentationDocument.Open(presentationFile, false))
+            //{
+            //    ReadSlideInfo(presentationDocument);
+            //}
 
             Console.WriteLine("Hello World!");
         }
 
-        private static void Startup()
+        private static IServiceProvider Startup()
         {
             Log.Logger = new LoggerConfiguration()
-                .WriteTo.File("consoleapp.log")
+                .WriteTo.File("runtime.log")
+                .WriteTo.Console()
                 .CreateLogger();
 
             var serviceCollection = new ServiceCollection();
             ConfigureServices(serviceCollection);
 
             var serviceProvider = serviceCollection.BuildServiceProvider();
+            return serviceProvider;
         }
 
         private static void ConfigureServices(IServiceCollection services)
         {
-            services.AddLogging(configure => configure.AddSerilog())
-                    .AddTransient<MyClass>();
+            services.AddLogging(configure => configure.AddSerilog());
+                    // .AddTransient<MyClass>();
         }
 
         // Insert the specified slide into the presentation at the specified position.

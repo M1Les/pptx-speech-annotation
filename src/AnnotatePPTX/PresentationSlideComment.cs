@@ -4,15 +4,19 @@ using System.Text;
 
 namespace AnnotatePPTX
 {
-    public class PresentationSlideComment
+    public class PresentationSlideNote
     {
-        private readonly string slidePartId;
-        private readonly string text;
-
-        public PresentationSlideComment(string slidePartId, string text)
+        public PresentationSlideNote(uint? slidePartId, string slideRelationshipId, string text)
         {
-            this.slidePartId = slidePartId;
-            this.text = text;
+            this.SlidePartId = slidePartId ?? throw new ArgumentNullException(nameof(slidePartId));
+            this.SlideRelationshipId = slideRelationshipId ?? throw new ArgumentNullException(nameof(slideRelationshipId));
+            this.Text = text ?? throw new ArgumentNullException(nameof(text));
         }
+
+        public uint SlidePartId { get; }
+
+        public string SlideRelationshipId { get; }
+
+        public string Text { get; }
     }
 }
