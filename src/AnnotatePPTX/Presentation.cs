@@ -6,42 +6,50 @@ using System.Text;
 using System.Linq;
 using System.IO;
 using Serilog;
+using CSCore.MediaFoundation;
+using CSCore;
 
 namespace AnnotatePPTX
 {
     public class Presentation
     {
-        private readonly string filePath;
-        private readonly ILogger logger;
+        private readonly string _filePath;
+        private readonly ILogger _logger;
+        private readonly AACEncoder _audioEncoder;
 
-        public Presentation(string filePath, ILogger logger)
+        public Presentation(string filePath, ILogger logger, AACEncoder audioEncoder)
         {
             if (string.IsNullOrWhiteSpace(filePath))
             {
                 throw new ArgumentException("Argument cannot be empty", nameof(filePath));
             }
 
-            this.filePath = filePath;
-            this.logger = logger;
+            this._filePath = filePath;
+            this._logger = logger;
+            this._audioEncoder = audioEncoder;
         }
 
         public IReadOnlyCollection<PresentationSlideNote> GetAllSlideNotes()
         {
             var comments = new List<PresentationSlideNote>();
 
-            using (PresentationDocument presentationDocument = PresentationDocument.Open(this.filePath, false))
+            using (PresentationDocument presentationDocument = PresentationDocument.Open(this._filePath, false))
             {
                 var presentationPart = presentationDocument.PresentationPart;
                 SlideIdList slideIdList = presentationPart.Presentation.SlideIdList;
+                uint slideShowIndex = 0;
+
+                _logger.Verbose($"Getting notes from {slideIdList.Count()} slides");
 
                 foreach (SlideId slideId in slideIdList.ChildElements)
                 {
+                    slideShowIndex++;
                     SlidePart slidePart = (SlidePart)presentationPart.GetPartById(slideId.RelationshipId);
                     var notesText = slidePart.NotesSlidePart?.NotesSlide?.InnerText;
 
                     if (!string.IsNullOrWhiteSpace(notesText))
                     {
-                        comments.Add(new PresentationSlideNote(slideId.Id?.Value, slideId.RelationshipId, notesText));
+                        comments.Add(new PresentationSlideNote(slideId.Id?.Value, slideId.RelationshipId, notesText, slideShowIndex));
                     }
                     //slidePart.Parts.Select(rel => rel.)
                     // NotesSlidePart.NotesSlide.InnerXml:
@@ -54,30 +62,82 @@ namespace AnnotatePPTX
 
         public void ReplaceSlideAudioAnnotation(string slideRelationshipId, byte[] audioFile)
         {
-            using (PresentationDocument presentationDocument = PresentationDocument.Open(this.filePath, true))
+            using (PresentationDocument presentationDocument = PresentationDocument.Open(this._filePath, true))
             {
-                var presentationPart = presentationDocument.PresentationPart;
-                SlidePart slidePart = (SlidePart)presentationPart.GetPartById(slideRelationshipId);
+                ReplaceSlideAudioAnnotationForRelationship(presentationDocument, slideRelationshipId, audioFile);
+            }
+        }
 
-                //string audioRelId = "rId2";
-                //MediaDataPart mediaPart = (MediaDataPart)slidePart.DataPartReferenceRelationships.FirstOrDefault(dpr => dpr.Id == audioRelId).DataPart;
-
-                MediaDataPart mediaPart = (MediaDataPart)slidePart.DataPartReferenceRelationships
-                    .FirstOrDefault(dpr => dpr.DataPart?.ContentType == "audio/x-wav" && dpr.RelationshipType.EndsWith("/relationships/media"))?.DataPart;
-
-                if (mediaPart != null)
+        public void ReplaceAllSlideAudioAnnotations(Dictionary<string, string> slidesToAnnotations)
+        {
+            _logger.Verbose($"Replacing slide audio annotations in batch mode for '{this._filePath}'.");
+            _logger.Verbose($"Got {slidesToAnnotations.Count} annotations for replacement.");
+            using (PresentationDocument presentationDocument = PresentationDocument.Open(this._filePath, true))
+            {
+                foreach (var item in slidesToAnnotations)
                 {
-                    this.logger.Verbose($"Replacing contents of '{mediaPart.Uri}' media part");
+                    if (string.IsNullOrWhiteSpace(item.Value))
+                    {
+                        _logger.Debug($"There was no translated annotation for relationship id: '{item.Key}'. Skipping.");
+                        continue;
+                    }
 
-                    using (BinaryWriter writer = new BinaryWriter(mediaPart.GetStream()))
+                    _logger.Verbose($"Replacing audio annotation. Relationship id: '{item.Key}', replacement file: '{item.Value}'");
+                    string slideRelationshipId = item.Key;
+                    var audioFile = File.ReadAllBytes(item.Value);
+
+                    // short files are most likely corrupt
+                    if (audioFile.LongLength < 100)
+                    {
+                        _logger.Warning($"Empty or corrupt wav file: '{item.Value}'.");
+                    }
+                    else
+                    {
+                        _logger.Verbose($"Replacement file size: '{audioFile.LongLength}'");
+                        ReplaceSlideAudioAnnotationForRelationship(presentationDocument, slideRelationshipId, audioFile);
+                    }
+                }
+            }
+        }
+
+        private void ReplaceSlideAudioAnnotationForRelationship(PresentationDocument presentationDocument, string slideRelationshipId, byte[] audioFile)
+        {
+            var presentationPart = presentationDocument.PresentationPart;
+            SlidePart slidePart = (SlidePart)presentationPart.GetPartById(slideRelationshipId);
+            MediaDataPart mediaPart = (MediaDataPart)slidePart.DataPartReferenceRelationships
+                .FirstOrDefault(dpr => (dpr.DataPart?.ContentType == "audio/x-wav" || dpr.DataPart?.ContentType == "audio/mp4")
+                                        && dpr.RelationshipType.EndsWith("/relationships/media"))?.DataPart;
+
+            if (mediaPart != null)
+            {
+                this._logger.Verbose($"Replacing contents of '{mediaPart.Uri}' media part.");
+
+                byte[] encodedAAC = new byte[0];
+
+                if (mediaPart.ContentType == "audio/mp4")
+                {
+                    this._logger.Verbose("Converting replacement audio from Wav to Mp4 AAC.");
+
+                    encodedAAC = _audioEncoder.FromWav(audioFile);
+                }
+
+                using (var mpStream = mediaPart.GetStream())
+                using (var writer = new BinaryWriter(mpStream))
+                {
+                    if (encodedAAC.LongLength > 0)
+                    {
+                        writer.Write(encodedAAC);
+                    }
+                    else
                     {
                         writer.Write(audioFile);
                     }
                 }
-                else
-                {
-                    this.logger.Verbose("Could not find any parts with '/relationships/media' type and 'audio/x-wav' content type");
-                }
+            }
+            else
+            {
+                this._logger.Warning("Current slide has no media in it.");
+                this._logger.Verbose("Could not find any parts with '/relationships/media' type and 'audio/x-wav' or 'audio/mp4' content types.");
             }
         }
     }
