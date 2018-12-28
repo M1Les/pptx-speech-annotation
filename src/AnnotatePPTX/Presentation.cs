@@ -133,11 +133,33 @@ namespace AnnotatePPTX
                         writer.Write(audioFile);
                     }
                 }
+
+                this._logger.Verbose("Updating slide duration to match new audio.");
+                using (var memStream = new MemoryStream(audioFile))
+                using (IWaveSource wavSource = new CSCore.Codecs.WAV.WaveFileReader(memStream))
+                {
+                    TimeSpan totalTime = wavSource.GetLength();
+                    this._logger.Verbose($"New audio length: {totalTime.TotalMilliseconds}ms.");
+                    UpdateSlideAdvanceAfterTime(slidePart, totalTime.TotalMilliseconds);
+                }
+
             }
             else
             {
                 this._logger.Warning("Current slide has no media in it.");
                 this._logger.Verbose("Could not find any parts with '/relationships/media' type and 'audio/x-wav' or 'audio/mp4' content types.");
+            }
+        }
+
+        public void UpdateSlideAdvanceAfterTime(SlidePart slidePart, double aatMS)
+        {
+            Slide slide = slidePart.Slide;
+
+            var transitions = slide.Descendants<Transition>();
+            var transitionWithAAT = transitions.FirstOrDefault(t => t.AdvanceAfterTime.HasValue);
+            if (transitionWithAAT != null)
+            {
+                transitionWithAAT.AdvanceAfterTime.Value = aatMS.ToString();
             }
         }
     }
